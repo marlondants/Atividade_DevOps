@@ -1,53 +1,177 @@
-name: CI - Verificacao HTML
+name: Pipeline - Atividade DevOps
 
-"on":
+# Eventos que iniciam a esteira
+on:
   push:
     branches:
       - main
       - develop
       - 'feature/**'
-
   pull_request:
     branches:
       - main
       - develop
-
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  verificar:
-    name: Verificar projeto
+  preparacao:
+    name: 1 - Preparacao
     runs-on: ubuntu-latest
-
     steps:
-      - name: Baixar o codigo
-        uses: actions/checkout@v4
+      - name: Baixar arquivos do repositorio
+        uses: actions/checkout@v6
 
-      - name: Verificar arquivos obrigatorios
+      - name: Conferir arquivos obrigatorios
         run: |
-          test -f index.html
-          echo "index.html encontrado"
-
-      - name: Verificar links entre paginas
-        shell: bash
-        run: |
-          for f in *.html; do
-            [ -f "$f" ] || continue
-
-            for alvo in $(grep -oE '(href|action)="[^"#]+\.html"' "$f" | cut -d'"' -f2); do
-              if [ ! -f "$alvo" ]; then
-                echo "ERRO: $f aponta para $alvo, que nao existe"
-                exit 1
-              fi
-            done
+          for arquivo in index.html cadastro.html painel_login.html style.css; do
+            if [ ! -s "$arquivo" ]; then
+              echo "::error::Arquivo ausente ou vazio: $arquivo"
+              exit 1
+            fi
+            echo "OK: $arquivo"
           done
 
-          echo "Todos os links estao corretos"
+  validacao:
+    name: 2 - Validacao de links
+    needs: preparacao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-      - name: Preparar o Node.js
-        uses: actions/setup-node@v4
+      - name: Verificar links, CSS e destino dos formularios
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlsplit, unquote
+
+          class Referencias(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.urls = []
+
+              def handle_starttag(self, tag, attrs):
+                  atributos = dict(attrs)
+                  for atributo in ('href', 'src', 'action'):
+                      if atributo in atributos and atributos[atributo]:
+                          self.urls.append(atributos[atributo])
+
+          for arquivo in sorted(Path('.').glob('*.html')):
+              parser = Referencias()
+              parser.feed(arquivo.read_text(encoding='utf-8'))
+              for endereco in parser.urls:
+                  url = urlsplit(endereco)
+                  if url.scheme or url.netloc or not url.path:
+                      continue  # URL externa ou ancora da pagina
+                  destino = arquivo.parent / unquote(url.path)
+                  if not destino.is_file():
+                      raise SystemExit(
+                          f'ERRO: {arquivo} aponta para {endereco}, que nao existe'
+                      )
+                  print(f'OK: {arquivo} -> {endereco}')
+          print('Todos os links e arquivos de estilo foram encontrados.')
+          PY
+
+  testes:
+    name: 3 - Testes dos formularios
+    needs: validacao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Testar estrutura do login, cadastro e painel
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class Pagina(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.formularios = []
+                  self.campos = []
+                  self.botoes = []
+                  self.links = []
+
+              def handle_starttag(self, tag, attrs):
+                  a = dict(attrs)
+                  if tag == 'form':
+                      self.formularios.append(a)
+                  elif tag == 'input':
+                      self.campos.append(a)
+                  elif tag == 'button':
+                      self.botoes.append(a)
+                  elif tag == 'a':
+                      self.links.append(a.get('href'))
+
+          def verificar_formulario(nome, destino, tipos):
+              pagina = Pagina()
+              pagina.feed(Path(nome).read_text(encoding='utf-8'))
+              assert any(f.get('action') == destino for f in pagina.formularios), (
+                  f'{nome}: formulario nao aponta para {destino}'
+              )
+              for tipo in tipos:
+                  assert any(c.get('type') == tipo and 'required' in c
+                             for c in pagina.campos), (
+                      f'{nome}: campo obrigatorio do tipo {tipo} ausente'
+                  )
+              assert any(c.get('type') == 'password' and
+                         int(c.get('minlength', '0')) >= 6
+                         for c in pagina.campos), (
+                  f'{nome}: senha deve ter minlength >= 6'
+              )
+              assert any(b.get('type') == 'submit' for b in pagina.botoes), (
+                  f'{nome}: botao submit nao encontrado'
+              )
+              print(f'OK: formulario de {nome}')
+
+          verificar_formulario('index.html', 'painel_login.html',
+                               ('email', 'password'))
+          verificar_formulario('cadastro.html', 'index.html',
+                               ('text', 'email', 'password'))
+          painel = Pagina()
+          painel.feed(Path('painel_login.html').read_text(encoding='utf-8'))
+          assert 'index.html' in painel.links, 'Painel sem link para voltar ao login'
+          css = Path('style.css').read_text(encoding='utf-8')
+          assert '.card' in css and 'button' in css, 'Estilos principais nao encontrados'
+          print('OK: navegacao do painel e estilos principais')
+          PY
+
+  publicacao:
+    name: 4 - Publicacao no GitHub Pages
+    needs: testes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Montar site estatico
+        run: |
+          mkdir -p _site
+          cp index.html cadastro.html painel_login.html style.css _site/
+          touch _site/.nojekyll
+
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Enviar arquivos para publicacao
+        uses: actions/upload-pages-artifact@v4
         with:
-          node-version: '22'
+          path: _site
 
-      - name: Validar o HTML
-        run: npx --yes htmlhint "**/*.html"
+      - name: Publicar no GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

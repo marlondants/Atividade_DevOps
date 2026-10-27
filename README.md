@@ -1,7 +1,5 @@
 # Atividade DevOps: Login e Cadastro
 
-![Pipeline](https://github.com/marlondants/Atividade_DevOps/actions/workflows/pipeline.yaml/badge.svg)
-
 Projeto da disciplina **Cultura DevOps**. É um sistema simples de login e cadastro, feito só com HTML e CSS, criado para praticar controle de versão com Git e GitHub, o fluxo de branches Gitflow e uma pipeline de integração contínua com GitHub Actions.
 
 ## Páginas do projeto

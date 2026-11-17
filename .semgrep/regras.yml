@@ -1,0 +1,44 @@
+rules:
+  - id: html-recurso-http-inseguro
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Link, formulário ou recurso usando http:// (sem criptografia).
+      Use https:// para evitar que os dados sejam interceptados.
+    pattern-regex: '(href|src|action)\s*=\s*"http://'
+    paths:
+      include:
+        - "*.html"
+
+  - id: html-senha-sem-minlength
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Campo de senha sem minlength. Defina um tamanho mínimo
+      (por exemplo minlength="6") para evitar senhas fracas.
+    pattern-regex: '<input(?![^>]*minlength)[^>]*type="password"[^>]*>'
+    paths:
+      include:
+        - "*.html"
+
+  - id: html-link-javascript-url
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Link com "javascript:" no endereço. Isso permite executar código
+      no navegador e é um risco de XSS.
+    pattern-regex: 'href\s*=\s*"javascript:'
+    paths:
+      include:
+        - "*.html"
+
+  - id: html-target-blank-sem-rel
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Link com target="_blank" sem rel="noopener". A página aberta pode
+      controlar a página original. Adicione rel="noopener noreferrer".
+    pattern-regex: '<a(?![^>]*rel=)[^>]*target="_blank"[^>]*>'
+    paths:
+      include:
+        - "*.html"

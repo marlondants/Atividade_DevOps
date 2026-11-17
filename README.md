@@ -52,14 +52,25 @@ As mensagens de commit seguem o padrão **Conventional Commits**, por exemplo `f
 
 ## Pipeline (GitHub Actions)
 
-A pipeline fica em `.github/workflows/pipeline.yaml` e roda a cada push e a cada Pull Request. Ela é dividida em quatro etapas, executadas em sequência:
+A pipeline fica em `.github/workflows/pipeline.yaml` e roda a cada push e a cada Pull Request. Ela é dividida em seis etapas, executadas em sequência:
 
 1. **Preparação:** confere se os arquivos obrigatórios existem e não estão vazios.
 2. **Validação de links:** verifica se links, estilos e destinos dos formulários apontam para arquivos existentes.
 3. **Testes dos formulários:** confere a estrutura do login, do cadastro e do painel.
-4. **Publicação no GitHub Pages:** publica o site, somente quando o código chega na `main`.
+4. **SAST (Semgrep):** analisa o código-fonte, sem executá-lo, em busca de falhas de segurança. Usa as regras padrão do Semgrep e regras próprias do projeto em `.semgrep/regras.yml`. Falha se encontrar qualquer problema.
+5. **DAST (OWASP ZAP):** sobe o site em um servidor de teste e o ataca de fora, como faria um invasor. Falha se encontrar vulnerabilidade de risco alto. O relatório completo fica disponível como artefato da execução.
+6. **Publicação no GitHub Pages:** publica o site, somente quando o código chega na `main`.
 
 Se uma etapa falha, as seguintes não são executadas.
+
+### Segurança: SAST e DAST
+
+| | SAST | DAST |
+|---|---|---|
+| O que analisa | O código-fonte | O site em funcionamento |
+| Quando roda | Antes de executar o site | Com o site no ar |
+| Tipo de teste | Caixa branca (vê o código) | Caixa preta (age como invasor) |
+| Ferramenta no projeto | Semgrep | OWASP ZAP |
 
 ## Estrutura do repositório
 
@@ -68,6 +79,8 @@ Se uma etapa falha, as seguintes não são executadas.
 ├── .github/
 │   └── workflows/
 │       └── pipeline.yaml
+├── .semgrep/
+│   └── regras.yml
 ├── cadastro.html
 ├── index.html
 ├── painel_login.html

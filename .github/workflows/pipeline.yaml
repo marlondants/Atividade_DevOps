@@ -140,9 +140,123 @@ jobs:
           print('OK: navegacao do painel e estilos principais')
           PY
 
-  publicacao:
-    name: 4 - Publicacao no GitHub Pages
+  # ---------------------------------------------------------------
+  # NOVO: SAST = analisa o CODIGO-FONTE, sem executar o site
+  # ---------------------------------------------------------------
+  sast:
+    name: 4 - SAST (analise estatica com Semgrep)
     needs: testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Instalar o Semgrep
+        run: pipx install semgrep
+
+      - name: Rodar o Semgrep no codigo-fonte
+        run: |
+          semgrep scan \
+            --config p/default \
+            --config .semgrep/regras.yml \
+            --metrics=off \
+            --error \
+            --json-output=semgrep-resultado.json \
+            .
+
+      - name: Validar o resultado do SAST
+        run: |
+          python3 - <<'PY'
+          import json
+          dados = json.load(open('semgrep-resultado.json'))
+          achados = dados.get('results', [])
+          erros = dados.get('errors', [])
+          print(f'Achados de seguranca: {len(achados)}')
+          print(f'Erros de execucao do Semgrep: {len(erros)}')
+          for a in achados:
+              print(f"- {a['check_id']} em {a['path']}:{a['start']['line']}")
+          if achados:
+              raise SystemExit('ERRO: o SAST encontrou problemas de seguranca no codigo')
+          print('SAST aprovado: nenhum problema encontrado.')
+          PY
+
+      - name: Guardar o relatorio do SAST
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-sast
+          path: semgrep-resultado.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------
+  # NOVO: DAST = ataca o SITE FUNCIONANDO, de fora, com OWASP ZAP
+  # ---------------------------------------------------------------
+  dast:
+    name: 5 - DAST (teste dinamico com OWASP ZAP)
+    needs: sast
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Subir o site e escanear com o ZAP
+        run: |
+          mkdir -p _site zap-report
+          cp index.html cadastro.html painel_login.html style.css _site/
+          chmod 777 zap-report
+
+          # liga um servidor local para o ZAP poder "visitar" o site
+          python3 -m http.server 8080 --directory _site > /dev/null 2>&1 &
+          SERVIDOR=$!
+          trap 'kill $SERVIDOR' EXIT
+
+          # validacao 1: o site precisa estar no ar antes do ataque
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8080/index.html > /dev/null && break
+            sleep 1
+          done
+          if ! curl -sf http://localhost:8080/index.html > /dev/null; then
+            echo "::error::O site de teste nao iniciou"
+            exit 1
+          fi
+          echo "Site no ar em http://localhost:8080"
+
+          # ataque simulado (baseline scan do OWASP ZAP)
+          docker run --rm --network host \
+            -v "$PWD/zap-report:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:8080 \
+            -r zap-report.html -J zap-report.json -m 1 -I
+
+      - name: Validar o resultado do DAST
+        run: |
+          python3 - <<'PY'
+          import json
+          dados = json.load(open('zap-report/zap-report.json'))
+          nomes = {'3': 'ALTO', '2': 'MEDIO', '1': 'BAIXO', '0': 'INFORMATIVO'}
+          contagem = {'3': 0, '2': 0, '1': 0, '0': 0}
+          for site in dados.get('site', []):
+              for alerta in site.get('alerts', []):
+                  codigo = str(alerta.get('riskcode', '0'))
+                  contagem[codigo] = contagem.get(codigo, 0) + 1
+                  print(f"[{nomes.get(codigo, codigo)}] {alerta.get('name')}")
+          print('Resumo:', {nomes[c]: n for c, n in contagem.items()})
+          if contagem['3'] > 0:
+              raise SystemExit('ERRO: o DAST encontrou vulnerabilidade de risco ALTO')
+          print('DAST aprovado: nenhuma vulnerabilidade de risco alto.')
+          PY
+
+      - name: Guardar o relatorio do DAST
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-dast
+          path: zap-report/
+          if-no-files-found: ignore
+
+  publicacao:
+    name: 6 - Publicacao no GitHub Pages
+    needs: dast
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
